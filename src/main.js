@@ -1,6 +1,6 @@
 'use strict';
 const DiscordRPC = require('discord-rpc');
-const { app, BrowserWindow, Menu, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, nativeImage, ipcMain, Tray } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { clearInterval } = require('timers');
@@ -21,7 +21,7 @@ const config = JSON.parse(fs.readFileSync(generalConfigPath));
 if (!config.continueWhereLeftOf || typeof config.continueWhereLeftOf !== 'boolean') config.continueWhereLeftOf = false;
 if (!config.continueURL || typeof config.continueURL !== 'string') config.continueURL = 'https://music.youtube.com/';
 
-let reconnectTimer, injected;
+let reconnectTimer, injected, nonstop_injected;
 
 const resourcePath = process.platform === 'darwin' ? 'Contents/Resources' : 'resources';
 
@@ -31,7 +31,7 @@ function executeJavaScript(code) {
 	});
 }
 
-let win, settingsWin;
+let win, settingsWin, tray;
 const menuTemplate = [
 	{
 		label: 'Interface',
@@ -101,8 +101,22 @@ function createWindow() {
 		win.setTitle(`${title} - v${require('../package.json').version}`);
 		e.preventDefault();
 	});
+	win.on('minimize', (event) => {
+		event.preventDefault();
+		win.hide();
+	});
+	win.on('restore', (event) => {
+		win.show();
+	});
 
-	win.webContents.on('dom-ready', settingsHook);
+	win.webContents.on('dom-ready', async () => {
+		await settingsHook();
+		
+		if (nonstop_injected) return;
+		
+		await executeJavaScript(fs.readFileSync(path.join(process.cwd(), 'src', 'autoconfirm.js')).toString().replaceAll('\r', ''));
+		nonstop_injected = true;
+	});
 	win.webContents.on('will-prevent-unload', e => e.preventDefault());
 
 	win.loadURL(config.continueURL, {
@@ -120,7 +134,33 @@ function createWindow() {
 	});
 }
 
-app.on('ready', createWindow);
+function createTray() {
+    tray = new Tray(getNativeImage('assets/images/Youtube-Music-logo.png'));
+    const contextMenu = Menu.buildFromTemplate([
+        {
+            label: 'Show', click: function () {
+                win.show();
+            }
+        },
+        {
+            label: 'Exit', click: function () {
+                app.isQuiting = true;
+                app.quit();
+            }
+        }
+    ]);
+
+    tray.on('double-click', function (event) {
+        win.show();
+    });
+    tray.setToolTip('YouTube Music');
+    tray.setContextMenu(contextMenu);
+}
+
+app.on('ready', () => {
+	createWindow();
+	createTray();
+});
 
 app.on('window-all-closed', () => {
 	fs.writeFileSync(generalConfigPath, JSON.stringify(config, null, '\t'));
@@ -133,6 +173,10 @@ app.on('will-quit', () => {
 app.on('activate', () => {
 	if (win === null) {
 		createWindow();
+	}
+	
+	if (tray === null) {
+		createTray();
 	}
 });
 
